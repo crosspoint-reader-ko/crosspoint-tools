@@ -119,6 +119,19 @@ jobs:
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
           restore-keys: pio-${{ runner.os }}-
 
+      # custom_sdkconfig envs (gh_release, sticky) run a nested `pio run` from
+      # ~/.platformio/penv, which otherwise resolves pioarduino 6.2.0; its
+      # tool-scons 4.11.1 fights the platform's 4.8.1 mid-build ("No module
+      # named 'SCons.Tool.FortranCommon'"). Mirrors upstream release.yml.
+      # See https://github.com/pioarduino/platform-espressif32/issues/529
+      - name: Pin pioarduino core inside the platform penv
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          pio pkg install -e gh_release
+          uv pip install --python ~/.platformio/penv/bin/python "pioarduino==6.1.19"
+          ~/.platformio/penv/bin/pio --version
+
       - name: Set build version
         if: steps.check.outputs.skip == 'false'
         run: |
