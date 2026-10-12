@@ -73,8 +73,7 @@ export default function DownloadModal({ open, onClose }) {
     if (!open || catalog) return
     let cancelled = false
     // schema=2 opts into x4c catalog entries (the default response omits them
-    // for old Unlocker builds). The modal doesn't list S3 devices from the
-    // catalog today, but this keeps the site on the full catalog if that changes.
+    // for old Unlocker builds); the S3 lists pull their recovery entries from it.
     fetch('/api/catalog?schema=2')
       .then((res) => {
         if (!res.ok) throw new Error(`Catalog request failed: ${res.status}`)
@@ -201,7 +200,14 @@ export default function DownloadModal({ open, onClose }) {
   // Order: stable, insider, betas, stock (newest first). Options hidden for the
   // selected device (via the admin panel) are filtered out first.
   const releases = useMemo(() => {
-    if (isS3Model(model)) return s3Releases[model] || []
+    // S3 lists are built client-side, but their Escape Hatch recovery bridges
+    // live in the catalog — append those so they're downloadable too.
+    if (isS3Model(model)) {
+      const recovery = (catalog?.releases || [])
+        .filter((r) => r.id.startsWith('recovery-') && r.supported_devices?.includes(model))
+        .map((r) => ({ ...r, filename: `${r.id.replace('recovery-', '')}.bin` }))
+      return [...(s3Releases[model] || []), ...recovery]
+    }
     if (!model || !catalog) return []
     const hidden = visibility.hidden || {}
     const isHidden = (key) => (hidden[key] || []).includes(model)

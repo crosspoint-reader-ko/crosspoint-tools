@@ -4482,13 +4482,14 @@ async function getOrComputeR2Sha(
   return { sha, size };
 }
 
-async function computeR2Sha(env: Env, r2Key: string): Promise<{ sha: string; size: number } | null> {
+async function computeR2Sha(env: Env, r2Key: string): Promise<{ sha: string; size: number; uploaded: string } | null> {
   const obj = await env.FIRMWARE_BUCKET.get(r2Key);
   if (!obj) return null;
   const buf = await obj.arrayBuffer();
   return {
     sha: await sha256Hex(buf),
     size: obj.size,
+    uploaded: obj.uploaded.toISOString(),
   };
 }
 
@@ -4686,7 +4687,7 @@ async function fetchEscapeHatchForCatalog(env: Env): Promise<CatalogRelease | nu
     channel: 'stable',
     name: 'Escape Hatch (recovery)',
     version: 'escape-hatch',
-    released_at: '2026-06-23T00:00:00Z',
+    released_at: result.uploaded,
     firmware_url: `${ORIGIN}/api/recovery/escape-hatch/firmware`,
     firmware_sha256: result.sha,
     size: result.size,
@@ -4707,7 +4708,7 @@ async function fetchEscapeHatchX4ProForCatalog(env: Env): Promise<CatalogRelease
     channel: 'stable',
     name: 'Escape Hatch (X4 Pro recovery)',
     version: 'escape-hatch-x4pro',
-    released_at: '2026-08-21T00:00:00Z',
+    released_at: result.uploaded,
     firmware_url: `${ORIGIN}/api/recovery/escape-hatch-x4pro/firmware`,
     firmware_sha256: result.sha,
     size: result.size,
@@ -4727,7 +4728,7 @@ async function fetchEscapeHatchX4CForCatalog(env: Env): Promise<CatalogRelease |
     channel: 'stable',
     name: 'Escape Hatch (X4C recovery)',
     version: 'escape-hatch-x4c',
-    released_at: '2026-09-28T00:00:00Z',
+    released_at: result.uploaded,
     firmware_url: `${ORIGIN}/api/recovery/escape-hatch-x4c/firmware`,
     firmware_sha256: result.sha,
     size: result.size,
