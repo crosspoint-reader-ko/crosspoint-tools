@@ -96,6 +96,14 @@ const PAGES: Record<string, PageMeta> = {
     title: 'Brand Kit',
     description: 'Download the CrossPoint Reader logo, icon, and mark as SVG and PNG, plus brand colors and type.',
   },
+  '/privacy': {
+    title: 'Privacy Policy',
+    description: 'What CrossPoint Reader and CrossPoint Sync collect, why, who we share it with, and how to delete it.',
+  },
+  '/terms': {
+    title: 'Terms of Service',
+    description: 'The terms for using crosspointreader.com and the hosted CrossPoint Sync service.',
+  },
   '/admin': { title: 'Admin', description: 'CrossPoint admin.', noindex: true },
 }
 

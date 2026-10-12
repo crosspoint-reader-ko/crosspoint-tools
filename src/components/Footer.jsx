@@ -96,8 +96,10 @@ export default function Footer() {
           <p className="text-xs text-stone-400">
             CrossPoint Reader is open-source under the MIT license.
           </p>
-          <p className="text-xs text-stone-400">
-            Built by the community, for the community.
+          <p className="flex gap-x-4 text-xs text-stone-400">
+            <Link to="/privacy" className="transition hover:text-stone-700">Privacy</Link>
+            <Link to="/terms" className="transition hover:text-stone-700">Terms</Link>
+            <span>Built by the community, for the community.</span>
           </p>
         </div>
       </div>
