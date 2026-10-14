@@ -1027,12 +1027,10 @@ export default function FlashTools() {
                       <div className="mt-0.5 font-mono text-xs text-stone-400">Stock English</div>
                     </button>
                   )}
-                  {(model === 'sticky' || XTEINK_PRO_MODELS.has(model)) && (
-                    <button type="button" onClick={() => selectFw('custom')} className={cardClass(fw === 'custom')}>
-                      <div className="text-sm font-semibold text-stone-900">Custom .bin</div>
-                      <div className="mt-0.5 font-mono text-xs text-stone-400">Upload file</div>
-                    </button>
-                  )}
+                  <button type="button" onClick={() => selectFw('custom')} className={cardClass(fw === 'custom')}>
+                    <div className="text-sm font-semibold text-stone-900">Custom .bin</div>
+                    <div className="mt-0.5 font-mono text-xs text-stone-400">Upload file</div>
+                  </button>
                 </div>
               ) : (
               <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
