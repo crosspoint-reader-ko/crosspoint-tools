@@ -371,12 +371,16 @@ export default function FlashTools() {
 
   // Devices the latest successful nightly built for (buildMeta.devices).
   const [nightlyDevices, setNightlyDevices] = useState([])
+  const [nightlyDate, setNightlyDate] = useState(null)
 
   useEffect(() => {
     let cancelled = false
     fetchBuildMeta()
       .then((m) => {
-        if (!cancelled && m?.status === 'success') setNightlyDevices(m.devices || [])
+        if (!cancelled && m?.status === 'success') {
+          setNightlyDevices(m.devices || [])
+          setNightlyDate(m.buildDate || null)
+        }
       })
       .catch(() => {})
     return () => {
@@ -956,18 +960,17 @@ export default function FlashTools() {
                   </div>
                   <div className="mt-0.5 font-mono text-xs text-stone-400">
                     {(() => {
-                      // Cards date themselves by the newest build offered: an
-                      // RC covering the device vs the beta upload date (device
-                      // builds) or the stable release date (any device with a
-                      // release asset). Resolution is the fallback while these
-                      // are still loading.
+                      // Cards date themselves by the newest offered RC,
+                      // nightly, uploaded build, or stable release. Resolution
+                      // is the fallback while these are still loading.
                       const rcDate = rcCoversDevice(m.id) ? rc.release.publishedAt : null
                       const stableDate =
                         !DEVICE_BUILD_MODELS.includes(m.id) || stableCoversDevice(m.id) ? releaseDate : null
                       const ownDate = DEVICE_BUILD_MODELS.includes(m.id)
                         ? deviceAvailability[m.id]?.uploadedAt
                         : null
-                      const date = [rcDate, stableDate, ownDate]
+                      const nightlyBuildDate = nightlyDevices.includes(m.id) ? nightlyDate : null
+                      const date = [rcDate, stableDate, ownDate, nightlyBuildDate]
                         .filter(Boolean)
                         .sort((a, b) => new Date(b) - new Date(a))[0]
                       return date ? `Updated ${fmtDate(date)}` : m.res
