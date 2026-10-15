@@ -18,4 +18,6 @@ path = "src/main.rs"
 unlocker-core = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-windivert = "0.6"
+# WinDivert is linked directly (see build.rs) and called via raw FFI in main.rs,
+# because the safe `windivert` crate doesn't expose the WinDivert-address control
+# needed to inject a reply on a different layer than it was captured on (#51).

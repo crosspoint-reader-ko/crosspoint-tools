@@ -3,36 +3,37 @@
 //!
 //! Background: the normal Windows path spoofs DNS via the `hosts` file, which
 //! only works when the device uses the resolver ICS hands out over DHCP. X4 Pro
-//! XTOS V7.6.10 (CN) ignores that and queries AliDNS `223.5.5.5` directly, so
-//! ICS NAT forwards it upstream and our spoof never participates
-//! (crosspoint-reader#3775). macOS/Linux don't have this problem because their
-//! pf/iptables rule redirects *all* outbound UDP/53 regardless of destination;
-//! Windows ICS exposes no equivalent, so we capture the forwarded query with
-//! WinDivert and answer it ourselves.
+//! XTOS V7.6.x (CN) ignores that and queries AliDNS `223.5.5.5` directly, so ICS
+//! NAT forwards it upstream and our spoof never participates (crosspoint-reader
+//! #3775, #51). macOS/Linux don't have this problem because their pf/iptables
+//! rule redirects *all* outbound UDP/53 regardless of destination; Windows ICS
+//! exposes no equivalent, so we capture the query with WinDivert and answer it.
 //!
-//! This runs *alongside* the hosts-file spoof, not instead of it: WinDivert's
-//! FORWARD layer only sees packets ICS routes through the host (device -> public
-//! resolver), while queries aimed at the ICS resolver stay local and are still
-//! handled by hosts. Together they cover both behaviors.
+//! Capture + injection follow the approach proven on a real device in issue #51:
+//! ICS makes the reader's query appear on the **forward** layer, outbound, in
+//! two copies — one pre-NAT (`src = 192.168.137.x`) and one post-NAT
+//! (`src = the PC's upstream IP`). We watch BOTH the forward and network layers,
+//! and we always inject the spoofed reply on the **network** handle with a
+//! hand-built address: toward a hotspot client it's an *outbound* packet; toward
+//! the PC's own post-NAT address it's *inbound* on the same interface and ICS
+//! translates it back to the reader. (Re-sending on the forward handle with the
+//! captured address never routes the reply back — that was the earlier bug.)
 //!
-//! Why a separate process: linking WinDivert makes `WinDivert.dll` a hard
-//! import, and a missing or AV-quarantined DLL stops such a binary from
-//! starting at all. The privileged helper must always start, so the capture
-//! loop lives here instead — if WinDivert is unavailable, broken, or the driver
-//! refuses to load, only this sidecar fails and the helper carries on with
-//! hosts-file spoofing. The helper spawns us when the user enables the Settings
-//! toggle (opening the handle below is what installs and starts WinDivert's
-//! kernel driver service) and stops us by killing the process; the kernel closes
-//! the handle on exit.
+//! The byte-level WinDivert address control this needs isn't exposed by the safe
+//! `windivert` crate, so we call the raw C API directly. `WinDivert.dll` must sit
+//! next to this exe at runtime; the import lib is linked in `build.rs`.
+//!
+//! Why a separate process: a missing or AV-quarantined `WinDivert.dll` stops any
+//! binary that imports it from starting. The privileged helper must always
+//! start, so the capture loop lives here — if WinDivert is unavailable the helper
+//! carries on with hosts-file spoofing. The helper spawns us when the user
+//! enables the Settings toggle and stops us by killing the process.
 //!
 //! Usage: unlocker-divert.exe --bridge-ip <ipv4> --hosts <name>[,<name>...]
 //!
-//! Diagnostics go to stderr, which the helper reads line by line into its own
-//! log. The packet parse/rewrite/checksum core lives in
-//! `unlocker_core::dns_intercept` and is unit-tested cross-platform; building
-//! this needs `WINDIVERT_PATH` pointing at the SDK libs (see `vendor/windivert/`).
-//! Not yet exercised against a device that hardcodes a resolver — the capture
-//! path is unverified on real traffic.
+//! Diagnostics go to stderr, which the helper reads into its own log. The
+//! packet parse/rewrite/checksum core lives in `unlocker_core::dns_intercept`
+//! and is unit-tested cross-platform.
 
 #[cfg(not(windows))]
 fn main() {
@@ -100,74 +101,200 @@ fn fail(msg: &str) -> ! {
     std::process::exit(2);
 }
 
-/// Capture UDP/53 that the hotspot subnet sends to any resolver, and answer the
-/// spoofed names locally. Non-spoofed queries are re-injected unchanged so real
-/// DNS keeps working. `192.168.137.0/24` is the fixed Windows Mobile Hotspot
-/// subnet; the filter also spares the bridge IP's own upstream lookups.
+// ── Raw WinDivert FFI (WinDivert 2.x) ────────────────────────────────────────
 #[cfg(windows)]
-const WINDIVERT_FILTER: &str =
-    "udp.DstPort == 53 and ip.SrcAddr >= 192.168.137.1 and ip.SrcAddr <= 192.168.137.254";
+mod windivert {
+    use std::os::raw::c_char;
+
+    pub type Handle = isize;
+    pub const INVALID_HANDLE: Handle = -1;
+    pub const LAYER_NETWORK: i32 = 0;
+    pub const LAYER_FORWARD: i32 = 1;
+    /// `WINDIVERT_ADDRESS` is 80 bytes on WinDivert 2.x.
+    pub const ADDR_SIZE: usize = 80;
+    /// Byte offset of the `Layer` field.
+    pub const ADDR_LAYER: usize = 8;
+    /// Byte offset of the flags bitfield; `Outbound` is bit 1.
+    pub const ADDR_FLAGS: usize = 10;
+    pub const OUTBOUND: u8 = 0x02;
+    /// `IfIdx` (u32) at 16, `SubIfIdx` (u32) at 20 — 8 contiguous bytes.
+    pub const ADDR_IFIDX: usize = 16;
+    pub const ADDR_IFIDX_LEN: usize = 8;
+
+    // No calling-convention attribute: WinDivert's exports are __cdecl, which is
+    // the single x86-64 convention, matching `extern "C"`.
+    extern "C" {
+        pub fn WinDivertOpen(
+            filter: *const c_char,
+            layer: i32,
+            priority: i16,
+            flags: u64,
+        ) -> Handle;
+        pub fn WinDivertRecv(
+            handle: Handle,
+            packet: *mut u8,
+            packet_len: u32,
+            recv_len: *mut u32,
+            addr: *mut u8,
+        ) -> i32;
+        pub fn WinDivertSend(
+            handle: Handle,
+            packet: *const u8,
+            packet_len: u32,
+            send_len: *mut u32,
+            addr: *const u8,
+        ) -> i32;
+    }
+}
 
 #[cfg(windows)]
 fn run(spoofed_hosts: Vec<String>, bridge_ip: std::net::Ipv4Addr) {
-    use std::borrow::Cow;
+    use std::sync::Arc;
+    use windivert::*;
+
+    let o = bridge_ip.octets();
+    let net = format!("{}.{}.{}", o[0], o[1], o[2]); // hotspot /24 prefix
+    // Local layer: queries from hotspot clients, plus anything leaving after ICS
+    // NAT. Forward layer: everything ICS routes through this PC.
+    let network_filter = format!(
+        "udp.DstPort == 53 and ((inbound and ip.SrcAddr >= {net}.2 and ip.SrcAddr <= {net}.254 \
+         and ip.DstAddr != {bridge_ip}) or (outbound and ip))"
+    );
+    let forward_filter = "ip and udp.DstPort == 53".to_string();
+
+    // Opening a handle is what installs + starts the WinDivert kernel driver.
+    // Failing here is normal when the driver can't load; exit non-zero and let
+    // the helper log it and carry on with hosts-file spoofing only.
+    let network = match open(&network_filter, LAYER_NETWORK) {
+        Ok(h) => h,
+        Err(e) => return driver_unavailable(e),
+    };
+    let forward = match open(&forward_filter, LAYER_FORWARD) {
+        Ok(h) => h,
+        Err(e) => return driver_unavailable(e),
+    };
+
+    tracing::info!(%bridge_ip, hosts = spoofed_hosts.len(),
+        "WinDivert DNS interceptor armed (network + forward)");
+
+    // The reply is always injected on the network handle, so both capture loops
+    // share it. A raw handle is just a number (Copy + Send).
+    let hosts = Arc::new(spoofed_hosts);
+    let net_prefix = [o[0], o[1], o[2]];
+
+    let hosts1 = hosts.clone();
+    let t1 = std::thread::spawn(move || {
+        capture_loop(network, network, &hosts1, bridge_ip, net_prefix, "local")
+    });
+    let hosts2 = hosts.clone();
+    let t2 = std::thread::spawn(move || {
+        capture_loop(forward, network, &hosts2, bridge_ip, net_prefix, "forward")
+    });
+    let _ = t1.join();
+    let _ = t2.join();
+}
+
+#[cfg(windows)]
+fn driver_unavailable(err: std::io::Error) {
+    tracing::error!(error = %err,
+        "WinDivert unavailable (driver missing or blocked); devices that hardcode a \
+         public resolver (e.g. X4 Pro XTOS V7.6.x CN) will not be captured");
+    std::process::exit(3);
+}
+
+#[cfg(windows)]
+fn open(filter: &str, layer: i32) -> std::io::Result<windivert::Handle> {
+    use std::ffi::CString;
+    let c = CString::new(filter).expect("filter has no interior NUL");
+    // Priority 1000 keeps us ahead of anything else poking UDP/53 (matches the
+    // proven responder from issue #51).
+    let h = unsafe { windivert::WinDivertOpen(c.as_ptr(), layer, 1000, 0) };
+    if h == windivert::INVALID_HANDLE {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(h)
+}
+
+/// Recv → spoof-or-pass loop for one WinDivert handle. Spoofed replies are
+/// injected on `inject` (the network handle); non-matching packets are
+/// re-injected unchanged on the handle they arrived on.
+#[cfg(windows)]
+fn capture_loop(
+    recv: windivert::Handle,
+    inject: windivert::Handle,
+    hosts: &[String],
+    bridge_ip: std::net::Ipv4Addr,
+    net_prefix: [u8; 3],
+    stage: &str,
+) {
     use unlocker_core::dns_intercept::spoof_forwarded_dns;
-    use windivert::layer;
-    use windivert::prelude::*;
+    use windivert::*;
 
-    // Opening the forward-layer handle is what installs + starts the WinDivert
-    // kernel driver service. Failing here is normal and expected when the
-    // driver can't load; exit non-zero and let the helper log it and move on
-    // with hosts-file spoofing only.
-    let handle =
-        match WinDivert::<layer::ForwardLayer>::forward(WINDIVERT_FILTER, 0, WinDivertFlags::new())
-        {
-            Ok(h) => h,
-            Err(e) => {
-                tracing::error!(error = %e,
-                    "WinDivert unavailable (driver missing or blocked); devices that hardcode \
-                     a public resolver (e.g. X4 Pro XTOS V7.6.10) will not be captured");
-                std::process::exit(3);
-            }
-        };
+    let mut pkt = vec![0u8; 0xFFFF];
+    let mut addr = [0u8; ADDR_SIZE];
 
-    tracing::info!(%bridge_ip, hosts = spoofed_hosts.len(), "WinDivert DNS interceptor armed");
-
-    // No stop flag: the helper stops us by killing the process, which closes
-    // the handle. recv() blocks until a matching packet arrives, so there is
-    // nothing to poll and nothing that can hang a teardown.
-    let mut buf = vec![0u8; 65535];
     loop {
-        let packet = match handle.recv(Some(&mut buf)) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::debug!(error = %e, "WinDivert recv error");
-                continue;
-            }
+        let mut n: u32 = 0;
+        let ok = unsafe {
+            WinDivertRecv(recv, pkt.as_mut_ptr(), pkt.len() as u32, &mut n, addr.as_mut_ptr())
         };
+        if ok == 0 {
+            let err = std::io::Error::last_os_error();
+            match err.raw_os_error() {
+                // ERROR_INVALID_HANDLE / ERROR_OPERATION_ABORTED / shutdown.
+                Some(6) | Some(995) | Some(232) => return,
+                _ => {
+                    tracing::debug!(%stage, error = %err, "WinDivert recv error");
+                    continue;
+                }
+            }
+        }
+        let n = n as usize;
 
-        match spoof_forwarded_dns(&packet.data, &spoofed_hosts, bridge_ip) {
+        match spoof_forwarded_dns(&pkt[..n], hosts, bridge_ip) {
             Some(reply) => {
-                // Ours: inject the crafted reply back toward the device and drop
-                // the original query (don't forward it upstream). windivert 0.6
-                // has no address->packet helper, so build the packet from its
-                // public fields: reuse the received forward-layer address (same
-                // interface — the device is directly connected on the hotspot
-                // subnet) with our owned payload. Checksums are already correct
-                // (built in dns_intercept), so no recalc is needed.
-                let out = WinDivertPacket::<layer::ForwardLayer> {
-                    address: packet.address.clone(),
-                    data: Cow::Owned(reply),
+                // Build the reply's WinDivert address: same interface as the
+                // query, delivered on the network layer. Toward a hotspot client
+                // the reply is outbound; toward the PC's own post-NAT address it
+                // is inbound and ICS translates it back. The reply's dst IP is at
+                // bytes 16..20.
+                let mut raddr = [0u8; ADDR_SIZE];
+                raddr[ADDR_IFIDX..ADDR_IFIDX + ADDR_IFIDX_LEN]
+                    .copy_from_slice(&addr[ADDR_IFIDX..ADDR_IFIDX + ADDR_IFIDX_LEN]);
+                raddr[ADDR_LAYER] = LAYER_NETWORK as u8;
+                let to_hotspot = reply[16..19] == net_prefix;
+                if to_hotspot {
+                    raddr[ADDR_FLAGS] |= OUTBOUND;
+                }
+                // Reply bytes already carry correct IPv4/UDP checksums (built in
+                // dns_intercept), so no WinDivert recalc is needed.
+                let mut sent: u32 = 0;
+                let ok = unsafe {
+                    WinDivertSend(
+                        inject,
+                        reply.as_ptr(),
+                        reply.len() as u32,
+                        &mut sent,
+                        raddr.as_ptr(),
+                    )
                 };
-                if let Err(e) = handle.send(&out) {
-                    tracing::debug!(error = %e, "WinDivert send (spoofed reply) failed");
+                if ok == 0 {
+                    tracing::debug!(%stage, error = %std::io::Error::last_os_error(),
+                        "WinDivert send (spoofed reply) failed");
+                } else {
+                    tracing::info!(%stage, "spoofed DNS answer injected");
                 }
             }
             None => {
-                // Not a spoofed name (or not a DNS query): forward unchanged so
-                // normal internet resolution keeps working.
-                if let Err(e) = handle.send(&packet) {
-                    tracing::debug!(error = %e, "WinDivert send (pass-through) failed");
+                // Not a spoofed name (or not a DNS query): re-inject unchanged so
+                // normal resolution (incl. NTP) keeps working through ICS.
+                let mut sent: u32 = 0;
+                let ok = unsafe {
+                    WinDivertSend(recv, pkt.as_ptr(), n as u32, &mut sent, addr.as_ptr())
+                };
+                if ok == 0 {
+                    tracing::debug!(%stage, error = %std::io::Error::last_os_error(),
+                        "WinDivert send (pass-through) failed");
                 }
             }
         }
