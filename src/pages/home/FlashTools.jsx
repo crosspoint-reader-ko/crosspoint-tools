@@ -955,7 +955,7 @@ export default function FlashTools() {
                   style={running ? { pointerEvents: 'none' } : undefined}
                 >
                   <div className="flex items-center gap-1.5">
-                    <img src={MODEL_BRANDS[m.id]} alt="" aria-hidden="true" className="h-4 w-auto max-w-24 shrink-0 rounded-sm object-contain" />
+                    <img src={MODEL_BRANDS[m.id]} alt="" aria-hidden="true" className="h-4 w-auto shrink-0 rounded-sm object-contain" />
                     <div className="text-sm font-semibold text-stone-900">{m.name}</div>
                   </div>
                   <div className="mt-0.5 font-mono text-xs text-stone-400">
