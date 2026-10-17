@@ -46,6 +46,14 @@ const SPECS = {
     connectors: ['usb-c'], mcu: 'ESP32-S3', psram: 8,
     battery: 1150, weight: 74.7, price: 65,
   },
+  // M5Stack PaperMono Lite: PaperMono minus NFC/LoRa (M5Stack shop spec table:
+  // same panel, FT6336G touch, frontlight, BMI270, RX8130CE, 1150 mAh, 72.4 g).
+  'acc-mvcnlvue': {
+    screen: 3.97, resolution: [480, 800], ppi: 235, frontlight: 'white',
+    touch: true, frontButtons: false, sideButtons: true, homeButton: false, gyro: true, rtc: true,
+    connectors: ['usb-c'], mcu: 'ESP32-S3', psram: 8,
+    battery: 1150, weight: 72.4, price: 55,
+  },
   // BOOX Picco
   'acc-muknw3sl': {
     screen: 3.97, resolution: [480, 800], ppi: 235, frontlight: 'warm-cool',
