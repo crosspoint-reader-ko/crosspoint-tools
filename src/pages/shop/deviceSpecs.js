@@ -71,6 +71,22 @@ const SPECS = {
     connectors: ['usb-c'], mcu: 'ESP32', psram: 8,
     battery: 1150, weight: 81.6, price: 85,
   },
+  // EEGOREAD A4. Not in the sheet: eegoread.com spec table (3.98", 238 PPI,
+  // warm & cool light, RTC, 84 g). N16R8 + no IMU from SDK eego-a4-support.md.
+  // Home = the capacitive screen key (short press Back, hold Home).
+  'acc-mvcmt9iy': {
+    screen: 3.98, resolution: [552, 768], ppi: 238, frontlight: 'warm-cool',
+    touch: true, frontButtons: false, sideButtons: true, homeButton: true, gyro: false, rtc: true,
+    connectors: ['usb-c'], mcu: 'ESP32-S3', psram: 8,
+    battery: 2000, weight: 84, price: 85.99,
+  },
+  // EEGOREAD A4 Lite: same board as the A4, no frontlight, 78 g.
+  'acc-mvcmuwo4': {
+    screen: 3.98, resolution: [552, 768], ppi: 238, frontlight: 'none',
+    touch: true, frontButtons: false, sideButtons: true, homeButton: true, gyro: false, rtc: true,
+    connectors: ['usb-c'], mcu: 'ESP32-S3', psram: 8,
+    battery: 2000, weight: 78, price: 65.99,
+  },
 }
 
 export function specFor(item) {
