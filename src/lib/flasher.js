@@ -409,7 +409,7 @@ function assertOtadataSwitch(ota, expectedApp, expectedSeq) {
 // --- Partition Table Parsing ---
 
 const PARTITION_TYPES = {
-  0x00: { 0x10: 'app-ota_0', 0x11: 'app-ota_1' },
+  0x00: { 0x00: 'app-factory', 0x10: 'app-ota_0', 0x11: 'app-ota_1' },
   0x01: { 0x00: 'data-ota', 0x01: 'data-phy', 0x02: 'data-nvs', 0x03: 'data-coredump', 0x82: 'data-spiffs' },
 };
 
@@ -499,6 +499,32 @@ function extractLayout(partitions) {
       { offset: app1.offset, size: app1.size },
     ],
   };
+}
+
+// Picks the OTA app slot to overwrite for an app-only flash, without touching
+// otadata. A factory partition is only ever chosen when there are no OTA
+// slots: on the BOOX Picco it is the vendor `safeboot` recovery image, which
+// must survive. With OTA slots: the slot otadata selects (IDF: slot =
+// (seq - 1) % slot count — the Picco has a single ota_0), else ota_0. Same
+// safe-window check as extractLayout.
+export function pickBootAppPartition(partitions, otadataRaw = null) {
+  const otaSlots = ['app-ota_0', 'app-ota_1']
+    .map((type) => partitions.find((p) => p.type === type))
+    .filter(Boolean);
+  let target;
+  if (otaSlots.length) {
+    // parseOtadata reports activeSeq 0 when no entry is eligible.
+    const seq = otadataRaw ? parseOtadata(otadataRaw).activeSeq : 0;
+    target = otaSlots[seq ? (seq - 1) % otaSlots.length : 0];
+  } else {
+    target = partitions.find((p) => p.type === 'app-factory');
+  }
+  if (!target) throw new Error('Partition table has no app partition.');
+  const end = (target.offset + target.size) >>> 0;
+  if (target.offset < 0x9000 || end < target.offset || end > 0x1000000) {
+    throw new Error(`Partition ${target.type} range 0x${target.offset.toString(16)}..0x${end.toString(16)} is outside the safe flash window.`);
+  }
+  return target;
 }
 
 // --- Main Flasher Class ---
@@ -784,6 +810,49 @@ export class CrossPointFlasher {
     return { partition: ota.inactiveApp === 0 ? 'app0' : 'app1', success: true };
   }
 
+  // --- App-only flash ---
+  // Writes the firmware into the single app partition the bootloader boots,
+  // and nothing else: no bootloader, partition table, otadata or NVS writes.
+  // Flash is only read outside that partition. For devices whose stock boot
+  // region must stay untouched (BOOX Picco).
+  async flashAppOnly(firmwareData, { onStepChange, onProgress } = {}) {
+    const steps = ['Connect to device', 'Read partition table', 'Flash app partition', 'Reset device'];
+    const step = (idx, status) => { if (onStepChange) onStepChange(idx, steps[idx], status); };
+
+    await validateFirmwareImage(firmwareData);
+
+    step(0, 'running');
+    await this.connect();
+    step(0, 'done');
+
+    step(1, 'running');
+    const partitions = parsePartitionTable(await this.espLoader.readFlash(0x8000, 0x1000));
+    const otadata = partitions.find((p) => p.type === 'data-ota');
+    const otadataRaw = otadata && otadata.size >= OTADATA_BYTES
+      ? await this.espLoader.readFlash(otadata.offset, OTADATA_BYTES)
+      : null;
+    const target = pickBootAppPartition(partitions, otadataRaw);
+    if (firmwareData.length > target.size) {
+      throw new Error(`Firmware too large: ${firmwareData.length} bytes won't fit in ${target.type} (${target.size} bytes).`);
+    }
+    step(1, 'done');
+
+    step(2, 'running');
+    await this.espLoader.writeFlash({
+      fileArray: [{ data: this.espLoader.ui8ToBstr(firmwareData), address: target.offset }],
+      flashSize: 'keep', flashMode: 'keep', flashFreq: 'keep',
+      eraseAll: false, compress: true,
+      reportProgress: (_, written, total) => { if (onProgress) onProgress('Flash app partition', written, total); },
+    });
+    step(2, 'done');
+
+    step(3, 'running');
+    await this.disconnect(false);
+    step(3, 'done');
+
+    return { partition: target.type, offset: target.offset };
+  }
+
   // --- Full Flash Save ---
 
   async saveFullFlash({ onStepChange, onProgress } = {}) {
@@ -1022,9 +1091,9 @@ export async function fetchFlashAsset(path, label) {
 }
 
 // Nightly build. x3/x4 share one image (no device param); x4pro/x4c/sticky/
-// papermono/metalio/eego_a4 build from their own PlatformIO envs and download by device id.
+// papermono/metalio/eego_a4/picco build from their own PlatformIO envs and download by device id.
 export async function fetchEarlyAccessFirmware(model) {
-  const device = ['x4pro', 'x4c', 'sticky', 'papermono', 'metalio', 'eego_a4'].includes(model) ? `?device=${model}` : '';
+  const device = ['x4pro', 'x4c', 'sticky', 'papermono', 'metalio', 'eego_a4', 'picco'].includes(model) ? `?device=${model}` : '';
   const res = await fetch(`/api/build/firmware${device}`);
   if (!res.ok) throw new Error(`Failed to download firmware: ${res.status}`);
   return new Uint8Array(await res.arrayBuffer());

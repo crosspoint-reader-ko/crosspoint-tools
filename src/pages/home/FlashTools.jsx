@@ -167,6 +167,7 @@ const MODELS = [
   { id: 'lilygo', name: 'LilyGo T5', res: '540 × 960' },
   { id: 'metalio', name: 'Metalio E-INK4', res: '480 × 800' },
   { id: 'eego_a4', name: 'EEGO Reader A4', res: '552 × 768' },
+  { id: 'picco', name: 'BOOX Picco', res: '480 × 800' },
 ]
 
 // Vendor favicon shown next to each device name in the picker, grouped by
@@ -183,6 +184,7 @@ const MODEL_BRANDS = {
   lilygo: '/brands/lilygo.png',
   metalio: '/brands/cloudzao.png',
   eego_a4: '/brands/eego.png',
+  picco: '/brands/boox.svg',
 }
 
 // esptool chip identity each device must report before we write anything.
@@ -202,6 +204,7 @@ const MODEL_CHIPS = {
   lilygo: 'ESP32-S3',
   metalio: 'ESP32-S3',
   eego_a4: 'ESP32-S3',
+  picco: 'ESP32-S3',
 }
 
 // The debug repair flow has known bootloader and partition layouts for these
@@ -290,6 +293,20 @@ const DEVICE_INSTALLS = {
   },
 }
 
+// Devices whose stock boot region must never be touched: only the app
+// partition the bootloader already boots is overwritten (flashAppOnly) — no
+// bootloader, partition table, otadata or NVS writes. bootMode is shown
+// before flashing; these devices need a manual button combo to enter the
+// ROM serial download mode.
+const APP_ONLY_INSTALLS = {
+  picco: {
+    name: 'BOOX Picco',
+    bootMode:
+      'Press and hold the Power button and Volume Up (+) together for more than 10 seconds to boot into serial flash mode.',
+    after: 'Press and hold the Power button to restart the device.',
+  },
+}
+
 // Xteink-class ESP32-S3 devices (X4 Pro, X4C). Both flash through the
 // normal OTA-slot flow, offer official stock firmware alongside the admin
 // build, and — unlike the C3 Xteinks — can't be rebooted over serial, so they
@@ -300,7 +317,11 @@ const XTEINK_PRO_MODELS = new Set(['x4pro', 'x4c'])
 // instead of the release/nightly/stock catalog. The DEVICE_INSTALLS subset
 // needs the full boot-region install; the XTEINK_PRO_MODELS are Xteink-class
 // hardware and flash through the normal OTA-slot flow.
-const DEVICE_BUILD_MODELS = [...XTEINK_PRO_MODELS, ...Object.keys(DEVICE_INSTALLS)]
+const DEVICE_BUILD_MODELS = [
+  ...XTEINK_PRO_MODELS,
+  ...Object.keys(DEVICE_INSTALLS),
+  ...Object.keys(APP_ONLY_INSTALLS),
+]
 
 // Vendor-level port filters for the non-Xteink devices: Espressif (0x303A,
 // any PID — USB-Serial-JTAG, ROM download mode, TinyUSB CDC), Seeed (0x2886)
@@ -475,7 +496,7 @@ export default function FlashTools() {
         })
         .catch(() => {})
       // Stable release info for the devices the 1.6.0+ releases cover
-      // (x4pro/x4c/sticky/papermono/metalio/eego_a4 ship their own release asset).
+      // (x4pro/x4c/sticky/papermono/metalio/eego_a4/picco ship their own release asset).
       setCrosspoint({ text: 'Loading...', enabled: false, tag: null, notesUrl: null })
       fetchReleaseMeta()
         .then((meta) => {
@@ -632,6 +653,7 @@ export default function FlashTools() {
     if (running) return
 
     const install = DEVICE_INSTALLS[model]
+    const appOnly = APP_ONLY_INSTALLS[model]
     const activeDeviceBuild = action.startsWith('device-')
       ? deviceBuilds.find((b) => `device-${b.id}` === action)
       : null
@@ -641,7 +663,7 @@ export default function FlashTools() {
     // requestPort() will throw "Must be handling a user gesture".
     let serialPort
     try {
-      serialPort = await CrossPointFlasher.requestPort(install ? DEVICE_PORT_FILTERS : undefined)
+      serialPort = await CrossPointFlasher.requestPort(install || appOnly ? DEVICE_PORT_FILTERS : undefined)
     } catch (err) {
       if (err.name !== 'NotFoundError') alert(err.message)
       return
@@ -649,6 +671,10 @@ export default function FlashTools() {
 
     if (install) {
       await runDeviceInstall(install, action, serialPort, activeDeviceBuild)
+      return
+    }
+    if (appOnly) {
+      await runAppOnlyFlash(appOnly, action, serialPort, activeDeviceBuild)
       return
     }
 
@@ -779,6 +805,64 @@ export default function FlashTools() {
             : null,
         },
       }))
+    }
+
+    setRunning(false)
+  }
+
+  // App-partition-only flash (see APP_ONLY_INSTALLS).
+  async function runAppOnlyFlash(appOnly, action, serialPort, activeDeviceBuild) {
+    const steps = ['Connect to device', 'Read partition table', 'Flash app partition', 'Reset device']
+    const states = steps.map(() => 'pending')
+
+    setRunning(true)
+    setRestart({ text: appOnly.after })
+    setPercent(0)
+    setProgress({
+      title: `Flashing ${activeDeviceBuild?.name || (action === 'custom' ? 'Custom Firmware' : 'CrossPoint')}...`,
+      steps,
+      states: [...states],
+      status: { kind: 'info', text: 'Downloading firmware...' },
+    })
+
+    const analyticsDetails = firmwareAnalyticsDetails(action)
+
+    try {
+      let firmware
+      if (action === 'custom') {
+        if (!customFile) throw new Error('No file selected')
+        firmware = new Uint8Array(await customFile.arrayBuffer())
+      } else if (action === 'crosspoint') {
+        firmware = await fetchReleaseFirmware(model)
+      } else if (action === 'nightly') {
+        firmware = await fetchEarlyAccessFirmware(model)
+      } else if (action === 'rc') {
+        firmware = await fetchRcFirmware(model)
+      } else {
+        firmware = await fetchDeviceBuildFirmware(model, activeDeviceBuild?.id)
+      }
+
+      setProgress((p) => ({ ...p, status: null }))
+
+      const flasher = new CrossPointFlasher(serialPort, {
+        expectedChip: MODEL_CHIPS[model],
+        deviceName: appOnly.name,
+      })
+      await flasher.flashAppOnly(firmware, {
+        onStepChange: (idx, name, status) => {
+          states[idx] = status
+          setProgress((p) => (p ? { ...p, states: [...states] } : p))
+        },
+        onProgress: (step, current, total) => {
+          setPercent((current / total) * 100)
+        },
+      })
+
+      trackFirmwareFlash(analyticsDetails)
+
+      setProgress((p) => ({ ...p, status: { kind: 'ok', text: `Flash complete! ${appOnly.after}` } }))
+    } catch (err) {
+      setProgress((p) => ({ ...p, status: { kind: 'err', text: err.message } }))
     }
 
     setRunning(false)
@@ -988,6 +1072,11 @@ export default function FlashTools() {
                 <StepBadge n={2} active={!!fw} />
                 <h3 className="font-display text-sm font-semibold text-stone-900">Choose firmware</h3>
               </div>
+              {APP_ONLY_INSTALLS[model] && (
+                <p className="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-sm/6 font-semibold text-amber-800">
+                  {APP_ONLY_INSTALLS[model].bootMode}
+                </p>
+              )}
               {DEVICE_BUILD_MODELS.includes(model) ? (
                 <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
                   {stableCoversDevice(model) && (
@@ -1347,9 +1436,11 @@ export default function FlashTools() {
                       )}
                       <p className="mt-2 text-xs text-stone-400">
                         Beta build for the {MODELS.find((m) => m.id === model)?.name}.{' '}
-                        {DEVICE_INSTALLS[model]
-                          ? 'Writes the bootloader, partition table, and firmware.'
-                          : 'Flashes to the OTA partition.'}
+                        {APP_ONLY_INSTALLS[model]
+                          ? 'Flashes the app partition only.'
+                          : DEVICE_INSTALLS[model]
+                            ? 'Writes the bootloader, partition table, and firmware.'
+                            : 'Flashes to the OTA partition.'}
                       </p>
                     </div>
                   )}
@@ -1359,9 +1450,11 @@ export default function FlashTools() {
                     <div>
                       <div className="text-sm font-semibold text-stone-900">Custom Firmware</div>
                       <p className="mt-1 text-xs text-stone-400">
-                        {DEVICE_INSTALLS[model]
-                          ? 'Upload a firmware .bin. Writes the full boot region (bootloader + partition table + firmware).'
-                          : 'Upload a .bin file to flash to the OTA partition.'}
+                        {APP_ONLY_INSTALLS[model]
+                          ? 'Upload a firmware .bin. Flashes the app partition only; the bootloader and partition table are left untouched.'
+                          : DEVICE_INSTALLS[model]
+                            ? 'Upload a firmware .bin. Writes the full boot region (bootloader + partition table + firmware).'
+                            : 'Upload a .bin file to flash to the OTA partition.'}
                       </p>
                       <div className="mt-4 flex gap-2">
                         <label className="flex flex-1 cursor-pointer items-center justify-center rounded-md border border-dashed border-stone-300 bg-white px-3 py-2.5 text-sm text-stone-500 hover:border-stone-400 hover:text-stone-700">

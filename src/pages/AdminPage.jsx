@@ -1330,8 +1330,8 @@ function BetaCard({ secret, log }) {
 
 // --- Release candidate channel ------------------------------------------------
 // Mirrors the latest GitHub prerelease on crosspoint-reader; the worker maps
-// its per-device assets by filename prefix (xteink_x4_x3 / x4pro / sticky /
-// papermono). The toggle gates both the RC buttons in the homepage flasher
+// its per-device assets by filename (crosspoint-<version>-<device>.bin). The
+// toggle gates both the RC buttons in the homepage flasher
 // and the /api/rc/firmware downloads, so turning it off takes effect even in
 // already-open tabs.
 
@@ -1342,6 +1342,9 @@ const RC_DEVICE_LABELS = {
   x4c: 'X4C',
   sticky: 'Sticky',
   papermono: 'PaperMono',
+  metalio: 'Metalio E-INK4',
+  eego_a4: 'EEGO A4',
+  picco: 'BOOX Picco',
 }
 
 function RcChannelCard({ secret, log }) {
@@ -2170,6 +2173,16 @@ export default function AdminPage() {
               uploadUrl="/api/device-build/metalio/upload"
               baseUrl="/api/device-build/metalio"
               description="Upload the Metalio E-INK4 build offered in the homepage web flasher. Each upload is added alongside the existing builds."
+            />
+            <DeviceBuildCard
+              secret={secret}
+              log={log}
+              label="BOOX Picco"
+              namePlaceholder="Build name (e.g. BOOX Picco Beta v1)"
+              infoUrl="/api/device-build/picco/info"
+              uploadUrl="/api/device-build/picco/upload"
+              baseUrl="/api/device-build/picco"
+              description="Upload the BOOX Picco app image (not a merged image) offered in the homepage web flasher. Flashes the app partition only; bootloader and partition table are never written. Each upload is added alongside the existing builds."
             />
             <IssueSubmissionsCard secret={secret} log={log} />
             <LogCard entries={entries} />

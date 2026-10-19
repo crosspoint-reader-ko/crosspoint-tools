@@ -7,6 +7,7 @@ const DEVICE_LABELS = {
   lilygo: 'LilyGo T5',
   metalio: 'Metalio E-INK4',
   eego_a4: 'EEGO Reader A4',
+  picco: 'BOOX Picco',
 }
 
 function cleanLabel(value) {

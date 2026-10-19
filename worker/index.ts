@@ -690,7 +690,7 @@ async function handleBuildSummary(
 // Devices with their own nightly PlatformIO env (`<device>-gh_release`
 // upstream). The shared `gh_release` image covers x3/x4 and stays at the
 // legacy `builds/latest/firmware.bin` key; these get a per-device suffix.
-const NIGHTLY_DEVICE_BUILDS = new Set(['x4pro', 'x4c', 'sticky', 'papermono', 'metalio', 'eego_a4']);
+const NIGHTLY_DEVICE_BUILDS = new Set(['x4pro', 'x4c', 'sticky', 'papermono', 'metalio', 'eego_a4', 'picco']);
 
 function nightlyR2Key(device: string | null, prefix = 'builds/latest'): string {
   return device && NIGHTLY_DEVICE_BUILDS.has(device)
@@ -850,7 +850,7 @@ async function handleBuildUpload(
     return json({ error: 'Unauthorized' }, 401, headers);
   }
 
-  // Per-device nightly uploads (?device=x4pro|x4c|sticky|papermono|metalio|eego_a4) land next to
+  // Per-device nightly uploads (?device=x4pro|x4c|sticky|papermono|metalio|eego_a4|picco) land next to
   // the shared image under a device-suffixed key. No device param = the
   // legacy shared x3/x4 image.
   const device = url.searchParams.get('device');
@@ -3837,7 +3837,7 @@ interface DeviceBuildConfig {
   defaultName: string;
   filename: string;
   label: string;
-  statusDevice: 'x4pro' | 'x4c' | 'sticky' | 'm5paper' | 'm5papers3' | 'lilygo' | 'papermono' | 'metalio';
+  statusDevice: 'x4pro' | 'x4c' | 'sticky' | 'm5paper' | 'm5papers3' | 'lilygo' | 'papermono' | 'metalio' | 'picco';
 }
 
 const DEVICE_BUILDS: Record<string, DeviceBuildConfig> = {
@@ -3904,6 +3904,14 @@ const DEVICE_BUILDS: Record<string, DeviceBuildConfig> = {
     filename: 'metalio-firmware.bin',
     label: 'Metalio E-INK4',
     statusDevice: 'metalio',
+  },
+  picco: {
+    r2Key: 'builds/picco/firmware.bin',
+    metaKey: 'picco-build',
+    defaultName: 'BOOX Picco Beta',
+    filename: 'picco-firmware.bin',
+    label: 'BOOX Picco',
+    statusDevice: 'picco',
   },
 };
 
@@ -4218,6 +4226,7 @@ const ASSET_SUFFIX_DEVICES: Record<string, string[]> = {
   papermono: ['papermono'],
   metalio_eink4: ['metalio'],
   eego_a4: ['eego_a4'],
+  picco: ['picco'],
 };
 
 // Maps a release/prerelease asset filename to the flasher device ids it
