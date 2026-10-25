@@ -16,10 +16,14 @@
     "test:instatus": "node --experimental-strip-types --test worker/instatus.test.mjs",
     "test:prebuilt-fonts": "node --experimental-strip-types --test worker/prebuilt-fonts.test.mjs",
     "test:flasher": "node --test src/lib/flasher.test.mjs",
-    "test:theme-builder": "node scripts/test-theme-builder.cjs"
+    "test:theme-builder": "node scripts/test-theme-builder.cjs",
+    "test:cpfont": "node --test src/lib/cpfont/cpfont.test.mjs",
+    "test:cpfont-parity": "node scripts/font-builder/parity.mjs",
+    "build:cpfont-wasm": "scripts/font-builder/wasm/build.sh"
   },
   "dependencies": {
     "dompurify": "^3.2.0",
+    "fontkit": "^2.0.4",
     "marked": "^15.0.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
