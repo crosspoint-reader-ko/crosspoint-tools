@@ -16,7 +16,7 @@ Web-based firmware flasher, build system, and font builder for [CrossPoint Reade
 
 ## Architecture
 
-The project runs on [Cloudflare Workers](https://workers.cloudflare.com/) with [GitHub Actions](https://github.com/features/actions) handling everything that needs a real toolchain (firmware compilation, font conversion):
+The project runs on [Cloudflare Workers](https://workers.cloudflare.com/) with [GitHub Actions](https://github.com/features/actions) handling everything that needs a real toolchain (firmware compilation, including custom-font firmware):
 
 - **Worker** (`worker/index.ts`) — API routes, firmware proxying, beta/custom-build orchestration, static asset serving
 - **R2 (`crosspoint-firmware`)** — Compiled firmware binaries and custom-build artifacts
@@ -193,7 +193,7 @@ If you want local builds to dispatch GitHub Actions, set `GITHUB_TOKEN` in `.dev
 - `GITHUB_ACTIONS_REPO=owner/repo`
 - `GITHUB_ACTIONS_REF=branch-or-tag`
 
-Without `GITHUB_TOKEN`, font/custom/manual build triggers will fail before the GitHub Actions step starts.
+Without `GITHUB_TOKEN`, custom/manual build triggers will fail before the GitHub Actions step starts.
 
 If Wrangler fails while downloading `cloudflared`, install it yourself and rerun the tunnel command:
 
