@@ -1,0 +1,4 @@
+dist
+scripts/font-builder/wasm/.build
+unlocker-tool
+.firecrawl
