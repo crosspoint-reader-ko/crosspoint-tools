@@ -15,12 +15,15 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { buildCpfonts } from '../../src/lib/cpfont/build.js'
 import { resolveIntervals } from '../../src/lib/cpfont/intervals.js'
 import { DEFAULT_FALLBACK_FILES, defaultFallbackNames } from '../../src/lib/cpfont/fallbacks.js'
 
-const HERE = path.dirname(new URL(import.meta.url).pathname)
+// fileURLToPath, not URL.pathname: the latter keeps percent-encoding (a repo
+// path with a space arrives as %20) and prefixes a slash on Windows drives.
+const HERE = path.dirname(fileURLToPath(import.meta.url))
 const FALLBACK_DIR = path.join(HERE, 'default-fallback-fonts')
 
 function parseArgs(argv) {
