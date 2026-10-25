@@ -44,6 +44,13 @@ export function loadFreeType() {
         if (mod._cp_init() !== 0) throw new Error('FreeType failed to initialize')
         return mod
       })
+      .catch((error) => {
+        // Only successful loads are worth caching. Caching the rejection would
+        // make a single dropped freetype.wasm fetch break every later build in
+        // the tab, with no way back short of a reload.
+        modulePromise = null
+        throw error
+      })
   }
   return modulePromise
 }
