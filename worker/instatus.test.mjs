@@ -20,7 +20,7 @@ function jsonResponse(value, status = 200) {
   })
 }
 
-test('creates a missing stable component and deduplicates release notifications', async (t) => {
+test('never creates a missing component and deduplicates release notifications', async (t) => {
   const kv = new Map()
   const components = new Map([
     ['x4-stable', {
@@ -39,6 +39,7 @@ test('creates a missing stable component and deduplicates release notifications'
     }],
   ])
   const incidents = []
+  let componentCreates = 0
 
   const originalFetch = globalThis.fetch
   t.after(() => { globalThis.fetch = originalFetch })
@@ -51,16 +52,13 @@ test('creates a missing stable component and deduplicates release notifications'
       return jsonResponse(components.get('x4-stable'))
     }
     if (method === 'GET' && url.pathname === '/v2/page/components') {
-      return jsonResponse([...components.values()])
+      // 100 filler components on page 1 so the real ones only show up on page 2.
+      const filler = Array.from({ length: 100 }, (_, i) => ({ id: `f${i}`, name: 'Other', group: 'other' }))
+      return jsonResponse(url.searchParams.get('page') === '2' ? [...components.values()] : filler)
     }
     if (method === 'POST' && url.pathname === '/v1/page/components') {
-      const component = {
-        id: 'x3-stable-created',
-        ...body,
-        group: body.group,
-      }
-      components.set(component.id, component)
-      return jsonResponse(component, 201)
+      componentCreates++
+      return jsonResponse({ id: 'should-not-exist' }, 201)
     }
     if (method === 'PUT' && url.pathname.startsWith('/v2/page/components/')) {
       const id = url.pathname.split('/').at(-1)
@@ -93,11 +91,11 @@ test('creates a missing stable component and deduplicates release notifications'
   }
   await reconcileStableStatus(env, build, true)
 
-  assert.equal(components.get('x3-stable-created').description, 'v1.5.0')
+  assert.equal(componentCreates, 0)
   assert.equal(components.get('x4-stable').description, 'v1.5.0')
   assert.equal(components.get('x4-stable').translations.description.en, 'v1.5.0')
   assert.equal(incidents.length, 1)
-  assert.deepEqual(new Set(incidents[0].components), new Set(['x3-stable-created', 'x4-stable']))
+  assert.deepEqual(incidents[0].components, ['x4-stable'])
   assert.equal(kv.get('instatus:notified:stable'), 'sha-150')
 
   await reconcileStableStatus(env, build, true)

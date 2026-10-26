@@ -267,7 +267,7 @@ async function resolveComponent(
   target: ComponentTarget,
   description: string,
   knownComponents?: InstatusComponent[]
-): Promise<InstatusComponent> {
+): Promise<InstatusComponent | null> {
   if (knownComponents) {
     const known = knownComponents.find(component =>
       (target.componentId && component.id === target.componentId) ||
@@ -287,41 +287,36 @@ async function resolveComponent(
     return component;
   }
 
+  // Never create components: they're managed by hand in Instatus. A missing
+  // one is skipped so it can't spawn duplicates on every reconcile.
   const components = knownComponents || await listComponents(config);
-  const existing = (components || []).find(component =>
+  const existing = components.find(component =>
     component.name?.toLowerCase() === target.name.toLowerCase() &&
     componentGroupId(component) === target.groupId
   );
   if (existing?.id) return existing;
-
-  const created = await instatusRequest<InstatusComponent>(
-    config,
-    `/v1/${config.pageId}/components`,
-    {
-      method: 'POST',
-      body: JSON.stringify({
-        name: target.name,
-        description,
-        status: 'OPERATIONAL',
-        order: target.order,
-        showUptime: false,
-        grouped: true,
-        group: target.groupId,
-        archived: false,
-      }),
-    }
-  );
-  if (!created?.id) throw new Error(`Instatus did not return an ID for new ${target.name} component`);
-  knownComponents?.push(created);
-  return created;
+  console.warn(JSON.stringify({
+    message: 'Instatus component not found; skipping (create it in Instatus)',
+    name: target.name,
+    groupId: target.groupId,
+  }));
+  return null;
 }
 
+// Paginated: reading only the first 100 made every component past page 1
+// look missing.
 async function listComponents(config: InstatusConfig): Promise<InstatusComponent[]> {
-  return await instatusRequest<InstatusComponent[]>(
-    config,
-    `/v2/${config.pageId}/components?per_page=100`,
-    { method: 'GET' }
-  ) || [];
+  const all: InstatusComponent[] = [];
+  for (let page = 1; page <= 20; page++) {
+    const batch = await instatusRequest<InstatusComponent[]>(
+      config,
+      `/v2/${config.pageId}/components?per_page=100&page=${page}`,
+      { method: 'GET' }
+    ) || [];
+    all.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return all;
 }
 
 async function removeDuplicateComponents(
@@ -350,8 +345,9 @@ async function updateComponent(
   target: ComponentTarget,
   description: string,
   knownComponents?: InstatusComponent[]
-): Promise<string> {
+): Promise<string | null> {
   const current = await resolveComponent(config, target, description, knownComponents);
+  if (!current) return null;
   if (
     current.name === target.name &&
     current.description === description &&
@@ -412,13 +408,13 @@ async function publishNotificationOnce(
   config: InstatusConfig,
   channel: string,
   fingerprint: string,
-  componentIds: string[],
+  componentIds: (string | null)[],
   name: string,
   message: string
 ): Promise<void> {
   const key = `${NOTIFIED_KEY_PREFIX}${channel}`;
   if (await env.BUILD_META.get(key) === fingerprint) return;
-  await publishNotification(config, componentIds, name, message);
+  await publishNotification(config, componentIds.filter((id): id is string => !!id), name, message);
   await env.BUILD_META.put(key, fingerprint);
 }
 
