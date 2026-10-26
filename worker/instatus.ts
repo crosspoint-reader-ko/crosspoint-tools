@@ -11,7 +11,7 @@ export type BetaNotification = {
   build: BetaBuild;
 };
 
-export type DeviceBuildStatusDevice = 'x4pro' | 'x4c' | 'sticky' | 'm5paper' | 'm5papers3' | 'lilygo' | 'papermono' | 'metalio' | 'picco';
+export type DeviceBuildStatusDevice = 'x4pro' | 'x4c' | 'sticky' | 'm5paper' | 'm5papers3' | 'lilygo' | 'papermono' | 'metalio' | 'eego_a4' | 'picco';
 
 export type PublishedBuildStatus = {
   name: string;
@@ -218,6 +218,12 @@ function deviceBuildTargets(env: Env): Record<DeviceBuildStatusDevice, Component
       name: 'Beta',
       groupId: env.INSTATUS_METALIO_GROUP_ID,
       componentId: env.INSTATUS_METALIO_BETA_COMPONENT_ID,
+      order: 0,
+    },
+    eego_a4: {
+      name: 'Beta',
+      groupId: env.INSTATUS_EEGO_A4_GROUP_ID,
+      componentId: env.INSTATUS_EEGO_A4_BETA_COMPONENT_ID,
       order: 0,
     },
     picco: {
@@ -695,6 +701,7 @@ const DEVICE_BUILD_LABELS: Record<DeviceBuildStatusDevice, string> = {
   lilygo: 'LilyGo T5',
   papermono: 'M5PaperMono',
   metalio: 'Metalio E-INK4',
+  eego_a4: 'EEGO A4',
   picco: 'BOOX Picco',
 };
 

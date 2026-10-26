@@ -2258,6 +2258,16 @@ export default function AdminPage() {
             <DeviceBuildCard
               secret={secret}
               log={log}
+              label="EEGO A4"
+              namePlaceholder="Build name (e.g. EEGO A4 Beta v1)"
+              infoUrl="/api/device-build/eego_a4/info"
+              uploadUrl="/api/device-build/eego_a4/upload"
+              baseUrl="/api/device-build/eego_a4"
+              description="Upload the EEGO Reader A4 build offered in the homepage web flasher. Each upload is added alongside the existing builds."
+            />
+            <DeviceBuildCard
+              secret={secret}
+              log={log}
               label="BOOX Picco"
               namePlaceholder="Build name (e.g. BOOX Picco Beta v1)"
               infoUrl="/api/device-build/picco/info"
