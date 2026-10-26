@@ -12,6 +12,7 @@
     "tunnel": "node scripts/tunnel.js",
     "tail": "wrangler tail",
     "test:betas": "node --experimental-strip-types --test worker/betas.test.mjs",
+    "test:github-pr": "node --experimental-strip-types --test worker/github-pr.test.mjs",
     "test:instatus": "node --experimental-strip-types --test worker/instatus.test.mjs",
     "test:prebuilt-fonts": "node --experimental-strip-types --test worker/prebuilt-fonts.test.mjs",
     "test:flasher": "node --test src/lib/flasher.test.mjs",

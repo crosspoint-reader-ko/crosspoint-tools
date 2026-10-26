@@ -1,4 +1,4 @@
-import type { BetaBuild, BetaSource, FirmwareDevice } from './types';
+import type { BetaBuild, BetaSource, FirmwareDevice, PrDeviceBuild } from './types';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -9,6 +9,14 @@ function optionalString(value: unknown): string | undefined {
 }
 
 function normalizeSource(value: unknown): BetaSource {
+  if (isRecord(value) && value.type === 'github-pr') {
+    const owner = optionalString(value.owner);
+    const repo = optionalString(value.repo);
+    const asset = optionalString(value.asset);
+    if (owner && repo && asset && typeof value.pr === 'number') {
+      return { type: 'github-pr', owner, repo, pr: value.pr, asset };
+    }
+  }
   if (!isRecord(value) || value.type !== 'github-release') return { type: 'upload' };
 
   const owner = optionalString(value.owner);
@@ -29,6 +37,17 @@ function normalizeHiddenDevices(value: unknown): FirmwareDevice[] | undefined {
   return devices.length ? devices : undefined;
 }
 
+function normalizePrDeviceBuilds(value: unknown): PrDeviceBuild[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: PrDeviceBuild[] = [];
+  for (const item of value) {
+    const device = isRecord(item) ? optionalString(item.device) : undefined;
+    const id = isRecord(item) ? optionalString(item.id) : undefined;
+    if (device && id) out.push({ device, id });
+  }
+  return out.length ? out : undefined;
+}
+
 export function normalizeBetaBuild(value: unknown): BetaBuild | null {
   if (!isRecord(value)) return null;
 
@@ -41,6 +60,7 @@ export function normalizeBetaBuild(value: unknown): BetaBuild | null {
   const binaryUpdatedAt = optionalString(value.binaryUpdatedAt) || updatedAt;
   const hiddenDevices = normalizeHiddenDevices(value.hiddenDevices);
   const firmwareSha256 = optionalString(value.firmwareSha256);
+  const prDeviceBuilds = normalizePrDeviceBuilds(value.prDeviceBuilds);
 
   return {
     id,
@@ -57,6 +77,7 @@ export function normalizeBetaBuild(value: unknown): BetaBuild | null {
     ...(firmwareSha256 ? { firmwareSha256 } : {}),
     source: normalizeSource(value.source),
     ...(hiddenDevices ? { hiddenDevices } : {}),
+    ...(prDeviceBuilds ? { prDeviceBuilds } : {}),
   };
 }
 

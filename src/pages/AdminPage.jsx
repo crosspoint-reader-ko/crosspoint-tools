@@ -817,8 +817,9 @@ function BetaCard({ secret, log }) {
   const [title, setTitle] = useState('')
   const [version, setVersion] = useState('')
   const [notes, setNotes] = useState('')
-  const [mode, setMode] = useState('upload') // 'upload' | 'release'
+  const [mode, setMode] = useState('upload') // 'upload' | 'release' | 'pr'
   const [file, setFile] = useState(null)
+  const [prUrl, setPrUrl] = useState('')
   const [releaseTag, setReleaseTag] = useState('')
   const [releaseRepo, setReleaseRepo] = useState('')
   const [hiddenDevices, setHiddenDevices] = useState([])
@@ -847,6 +848,7 @@ function BetaCard({ secret, log }) {
   const hasReleaseIdentity = !!title.trim() && !!version.trim()
   const uploadDisabled = busy || !file || !hasReleaseIdentity
   const releaseDisabled = busy || !releaseTag.trim() || !hasReleaseIdentity
+  const prDisabled = busy || !prUrl.trim() || !hasReleaseIdentity
 
   async function uploadBeta() {
     const trimmedTitle = title.trim()
@@ -857,7 +859,10 @@ function BetaCard({ secret, log }) {
     const tag = releaseTag.trim()
     const repo = releaseRepo.trim()
 
-    if (isRelease) {
+    const isPr = mode === 'pr'
+    if (isPr) {
+      if (!prUrl.trim()) return
+    } else if (isRelease) {
       if (!tag) return
     } else if (!file) {
       return
@@ -872,7 +877,9 @@ function BetaCard({ secret, log }) {
       formData.append('notes', notes.trim())
       formData.append('hiddenDevices', JSON.stringify(hiddenDevices))
       formData.append('notify', String(notify))
-      if (isRelease) {
+      if (isPr) {
+        formData.append('prUrl', prUrl.trim())
+      } else if (isRelease) {
         formData.append('releaseTag', tag)
         if (repo) formData.append('releaseRepo', repo)
       } else {
@@ -886,7 +893,25 @@ function BetaCard({ secret, log }) {
       })
       const data = await res.json()
 
-      if (res.ok) {
+      if (res.ok && isPr) {
+        log(
+          'PR import: ' +
+            [
+              data.build ? 'beta (X3/X4)' : null,
+              ...(data.deviceBuilds || []).map((d) => d.device),
+            ]
+              .filter(Boolean)
+              .join(', ') +
+            (data.skipped?.length ? ' — skipped ' + data.skipped.join(', ') : '') +
+            '. Reload to see device builds.'
+        )
+        setTitle('')
+        setVersion('')
+        setNotes('')
+        setPrUrl('')
+        setHiddenDevices([])
+        loadBetaList()
+      } else if (res.ok) {
         log(
           'Beta build created: ' +
             data.build.title +
@@ -975,7 +1000,9 @@ function BetaCard({ secret, log }) {
     formData.append('notes', editNotes)
     formData.append('hiddenDevices', JSON.stringify(edit.hiddenDevices || []))
     formData.append('notify', String(edit.notify !== false))
-    if (edit.replacementMode === 'upload' && edit.firmware) {
+    if (edit.replacementMode === 'pr') {
+      formData.append('repullPr', 'true')
+    } else if (edit.replacementMode === 'upload' && edit.firmware) {
       formData.append('firmware', edit.firmware)
     } else if (edit.replacementMode === 'release' && tag) {
       formData.append('releaseTag', tag)
@@ -992,6 +1019,7 @@ function BetaCard({ secret, log }) {
 
       if (res.ok) {
         const replaced =
+          edit.replacementMode === 'pr' ||
           (edit.replacementMode === 'upload' && edit.firmware) ||
           (edit.replacementMode === 'release' && tag)
         log(
@@ -1072,9 +1100,42 @@ function BetaCard({ secret, log }) {
           >
             GitHub Release
           </button>
+          <button
+            type="button"
+            onClick={() => setMode('pr')}
+            className={`${modeBtnBase} ${mode === 'pr' ? modeActive : modeInactive}`}
+          >
+            GitHub PR
+          </button>
         </div>
 
-        {mode === 'upload' ? (
+        {mode === 'pr' ? (
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={prUrl}
+                onChange={(e) => setPrUrl(e.target.value)}
+                placeholder="https://github.com/crosspoint-reader/crosspoint-reader/pull/1234"
+                className={`${inputCls} flex-1`}
+              />
+              <Button
+                as="button"
+                variant="primary"
+                className="shrink-0"
+                onClick={uploadBeta}
+                disabled={prDisabled}
+              >
+                {busy ? 'Pulling...' : 'Pull from PR'}
+              </Button>
+            </div>
+            <p className="text-xs text-stone-400">
+              Reads the CI firmware-artifacts comment: X3/X4{' '}
+              <code className="rounded bg-stone-100 px-1 py-0.5 font-mono">firmware.bin</code> becomes
+              this beta, every other device gets a device build named after the title and version.
+            </p>
+          </div>
+        ) : mode === 'upload' ? (
           <div className="flex gap-2">
             <label className="flex flex-1 cursor-pointer items-center justify-center rounded-lg border border-dashed border-stone-300 bg-stone-50 px-3 py-2 text-sm text-stone-500 hover:border-stone-400 hover:text-stone-700">
               <span className="truncate">{file ? file.name : 'Choose .bin file...'}</span>
@@ -1172,6 +1233,12 @@ function BetaCard({ secret, log }) {
                           &middot; <span className="text-brand-600">release {src.tag}</span>
                         </>
                       )}
+                      {b.source?.type === 'github-pr' && (
+                        <>
+                          {' '}
+                          &middot; <span className="text-brand-600">PR #{b.source.pr}</span>
+                        </>
+                      )}
                       {b.notes && (
                         <>
                           {' '}
@@ -1256,8 +1323,22 @@ function BetaCard({ secret, log }) {
                         >
                           GitHub Release
                         </button>
+                        {b.source?.type === 'github-pr' && (
+                          <button
+                            type="button"
+                            onClick={() => setEditField(b.id, 'replacementMode', 'pr')}
+                            className={`${modeBtnBase} ${edit.replacementMode === 'pr' ? modeActive : modeInactive}`}
+                          >
+                            Re-pull PR
+                          </button>
+                        )}
                       </div>
-                      {edit.replacementMode === 'upload' ? (
+                      {edit.replacementMode === 'pr' ? (
+                        <p className="text-xs text-stone-400">
+                          On save, downloads the latest CI artifacts from PR #{b.source.pr} and replaces this
+                          beta's binary plus its linked device builds in place.
+                        </p>
+                      ) : edit.replacementMode === 'upload' ? (
                         <label className="flex cursor-pointer items-center justify-center rounded-md border border-dashed border-stone-300 bg-stone-50 px-3 py-2 text-xs text-stone-500 hover:border-stone-400 hover:text-stone-700">
                           <span className="truncate">
                             {edit.firmware ? edit.firmware.name : 'Choose a replacement .bin...'}

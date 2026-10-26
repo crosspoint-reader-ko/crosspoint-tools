@@ -1,5 +1,6 @@
-import type { Env, BuildMetadata, CustomBuildMetadata, FontBuildMetadata, ThemeBuildMetadata, FontTree, FontFile, BetaBuild, BetaSource, Accessory, FirmwareDevice, ReleaseVisibility } from './types';
-import { betaDevices, normalizeBetaBuildList } from './betas';
+import type { Env, BuildMetadata, CustomBuildMetadata, FontBuildMetadata, ThemeBuildMetadata, FontTree, FontFile, BetaBuild, BetaSource, PrDeviceBuild, Accessory, FirmwareDevice, ReleaseVisibility } from './types';
+import { betaDevices, betaDisplayName, normalizeBetaBuildList } from './betas';
+import { PR_ARTIFACTS_MARKER, parseArtifactComment, parsePrUrl, unzipFirstBin } from './github-pr';
 import { pageMeta, SITE } from '../src/lib/seo';
 import { DEVICES } from '../src/lib/devices.ts';
 import { getPrebuiltFontAssetUrl, getPrebuiltFontManifest } from './prebuilt-fonts';
@@ -3508,7 +3509,6 @@ async function handleBetaCreate(
   const formData = await request.formData();
   const titleRaw = formData.get('title') ?? formData.get('name');
   const versionRaw = formData.get('version');
-  const notes = formData.get('notes');
   const firmware = formData.get('firmware') as string | File | null;
   const releaseTagRaw = formData.get('releaseTag');
   const releaseTag = typeof releaseTagRaw === 'string' ? releaseTagRaw.trim() : '';
@@ -3533,6 +3533,12 @@ async function handleBetaCreate(
   const hasUpload = firmware && typeof firmware !== 'string';
   if (hasUpload && releaseTag) {
     return json({ error: 'Provide either a firmware file OR a release tag, not both' }, 400, headers);
+  }
+
+  const prUrlRaw = formData.get('prUrl');
+  const prUrl = typeof prUrlRaw === 'string' ? prUrlRaw.trim() : '';
+  if (prUrl) {
+    return handleBetaCreateFromPr(prUrl, formData, title, version, env, ctx, headers);
   }
 
   if (hasUpload) {
@@ -3562,6 +3568,22 @@ async function handleBetaCreate(
     return json({ error: 'Provide either a firmware .bin file or a release tag' }, 400, headers);
   }
 
+  const build = await storeNewBeta(id, data, source, formData, title, version, env, ctx);
+  return json({ build }, 201, headers);
+}
+
+async function storeNewBeta(
+  id: string,
+  data: ArrayBuffer,
+  source: BetaSource,
+  formData: FormData,
+  title: string,
+  version: string,
+  env: Env,
+  ctx: ExecutionContext,
+  prDeviceBuilds?: PrDeviceBuild[]
+): Promise<BetaBuild> {
+  const notes = formData.get('notes');
   const sha256 = await sha256Hex(data);
   await env.FIRMWARE_BUCKET.put(`builds/beta/${id}/firmware.bin`, data, {
     customMetadata: { sha256 },
@@ -3583,6 +3605,7 @@ async function handleBetaCreate(
     firmwareSha256: sha256,
     source,
     ...(hiddenDevices.length ? { hiddenDevices } : {}),
+    ...(prDeviceBuilds?.length ? { prDeviceBuilds } : {}),
   };
 
   const list = await getBetaList(env);
@@ -3593,8 +3616,123 @@ async function handleBetaCreate(
     : undefined;
   if (notification) await queueBetaNotification(env, notification);
   scheduleBetaStatusReconcile(ctx, env, list, notification);
+  return build;
+}
 
-  return json({ build }, 201, headers);
+type PrBinary = { filename: string; cfgKey: string | null; data: ArrayBuffer };
+
+// Downloads every applicable binary from a crosspoint-reader PR's CI
+// artifacts comment. cfgKey null = the X3/X4 beta binary, otherwise a
+// DEVICE_BUILDS key. Everything is fetched before anything is written so a
+// failed/expired artifact can't leave a half-updated set.
+// ponytail: holds all binaries in memory (~6 x 5.5 MB); stream to R2 first if
+// the device count grows toward the 128 MB Worker limit.
+async function fetchPrBinaries(
+  env: Env,
+  pr: { owner: string; repo: string; pr: number }
+): Promise<{ binaries: PrBinary[]; skipped: string[] } | { error: string; status: number }> {
+  if (!env.GITHUB_TOKEN) return { error: 'GITHUB_TOKEN is required to download PR artifacts', status: 500 };
+  const ghHeaders = {
+    'User-Agent': 'crosspoint-tools',
+    Accept: 'application/vnd.github+json',
+    Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+  };
+
+  // Newest matching comment wins; the bot comment can sit anywhere in a long thread.
+  let artifacts: ReturnType<typeof parseArtifactComment> = [];
+  for (let page = 1; page <= 10; page++) {
+    const res = await fetch(
+      `https://api.github.com/repos/${pr.owner}/${pr.repo}/issues/${pr.pr}/comments?per_page=100&page=${page}`,
+      { headers: ghHeaders }
+    );
+    if (!res.ok) return { error: `Failed to read PR #${pr.pr} comments (HTTP ${res.status})`, status: 502 };
+    const comments = await res.json() as Array<{ body?: string }>;
+    for (const c of comments) {
+      if (c.body?.includes(PR_ARTIFACTS_MARKER)) artifacts = parseArtifactComment(c.body);
+    }
+    if (comments.length < 100) break;
+  }
+  if (!artifacts.length) {
+    return { error: `No firmware artifacts comment found on PR #${pr.pr}`, status: 422 };
+  }
+
+  const binaries: PrBinary[] = [];
+  const skipped: string[] = [];
+  for (const artifact of artifacts) {
+    const devices = ASSET_SUFFIX_DEVICES[artifact.suffix] || [];
+    const cfgKey = devices.includes('x4') ? null : devices.find(d => DEVICE_BUILDS[d]);
+    if (cfgKey === undefined) {
+      skipped.push(artifact.filename);
+      continue;
+    }
+
+    // The API 303s to a pre-signed blob URL; follow it by hand so the GitHub
+    // token isn't forwarded to the blob host.
+    let zipRes = await fetch(
+      `https://api.github.com/repos/${pr.owner}/${pr.repo}/actions/artifacts/${artifact.artifactId}/zip`,
+      { headers: ghHeaders, redirect: 'manual' }
+    );
+    const location = zipRes.headers.get('Location');
+    if (zipRes.status >= 300 && zipRes.status < 400 && location) {
+      zipRes = await fetch(location, { headers: { 'User-Agent': 'crosspoint-tools' } });
+    }
+    if (!zipRes.ok) {
+      return {
+        error: `Failed to download ${artifact.filename} (HTTP ${zipRes.status}${zipRes.status === 410 ? ', artifact expired' : ''})`,
+        status: 502,
+      };
+    }
+    const data = await unzipFirstBin(await zipRes.arrayBuffer());
+    if (!data || data.byteLength === 0 || data.byteLength > MAX_BETA_FIRMWARE_SIZE) {
+      return { error: `No usable .bin inside ${artifact.filename} artifact`, status: 422 };
+    }
+    binaries.push({ filename: artifact.filename, cfgKey, data });
+  }
+  return { binaries, skipped };
+}
+
+// Creates a beta from a crosspoint-reader PR's CI artifacts: the X3/X4
+// `firmware.bin` becomes the beta itself, every other device's binary is
+// added as a device build under the same "title version" name. The beta
+// records those device build ids so a re-pull updates them in place.
+async function handleBetaCreateFromPr(
+  prUrl: string,
+  formData: FormData,
+  title: string,
+  version: string,
+  env: Env,
+  ctx: ExecutionContext,
+  headers: Record<string, string>
+): Promise<Response> {
+  const pr = parsePrUrl(prUrl);
+  if (!pr) return json({ error: 'Not a GitHub PR URL' }, 400, headers);
+  const fetched = await fetchPrBinaries(env, pr);
+  if ('error' in fetched) return json({ error: fetched.error }, fetched.status, headers);
+
+  const notes = (formData.get('notes') as string | null)?.trim() || '';
+  const notify = notifyRequested(formData.get('notify'));
+  const prDeviceBuilds: PrDeviceBuild[] = [];
+  for (const bin of fetched.binaries) {
+    if (!bin.cfgKey) continue;
+    const build = await upsertDeviceBuild(env, ctx, DEVICE_BUILDS[bin.cfgKey], undefined, bin.data, `${title} ${version}`, notes, notify);
+    prDeviceBuilds.push({ device: bin.cfgKey, id: build.id });
+  }
+
+  const betaBin = fetched.binaries.find(b => !b.cfgKey);
+  const beta = betaBin
+    ? await storeNewBeta(
+      `beta-${crypto.randomUUID()}`,
+      betaBin.data,
+      { type: 'github-pr', owner: pr.owner, repo: pr.repo, pr: pr.pr, asset: betaBin.filename },
+      formData, title, version, env, ctx, prDeviceBuilds
+    )
+    : null;
+
+  return json({
+    build: beta,
+    deviceBuilds: prDeviceBuilds.map(d => ({ device: DEVICE_BUILDS[d.device].label, id: d.id })),
+    skipped: fetched.skipped,
+  }, 201, headers);
 }
 
 type BetaUpdateInput = {
@@ -3606,6 +3744,7 @@ type BetaUpdateInput = {
   hiddenDevices?: unknown;
   firmware?: File;
   notify?: unknown;
+  repullPr?: unknown;
 };
 
 // Admin forms can opt out of the Instatus subscriber notification; anything
@@ -3633,6 +3772,7 @@ async function parseBetaUpdateInput(request: Request): Promise<BetaUpdateInput |
       ...(formData.has('releaseRepo') ? { releaseRepo: formData.get('releaseRepo') } : {}),
       ...(formData.has('hiddenDevices') ? { hiddenDevices: formData.get('hiddenDevices') } : {}),
       ...(formData.has('notify') ? { notify: formData.get('notify') } : {}),
+      ...(formData.has('repullPr') ? { repullPr: formData.get('repullPr') } : {}),
       ...(firmware instanceof File ? { firmware } : {}),
     };
   }
@@ -3649,6 +3789,7 @@ async function parseBetaUpdateInput(request: Request): Promise<BetaUpdateInput |
     ...(Object.hasOwn(parsed, 'releaseRepo') ? { releaseRepo: parsed.releaseRepo } : {}),
     ...(Object.hasOwn(parsed, 'hiddenDevices') ? { hiddenDevices: parsed.hiddenDevices } : {}),
     ...(Object.hasOwn(parsed, 'notify') ? { notify: parsed.notify } : {}),
+    ...(Object.hasOwn(parsed, 'repullPr') ? { repullPr: parsed.repullPr } : {}),
   };
 }
 
@@ -3706,8 +3847,42 @@ async function handleBetaUpdate(
     return json({ error: 'Provide either a replacement firmware file OR a release tag, not both' }, 400, headers);
   }
 
+  const repullPr = body.repullPr === true || body.repullPr === 'true';
+  if (repullPr && (hasUpload || releaseTag)) {
+    return json({ error: 'Re-pull from PR cannot be combined with another firmware source' }, 400, headers);
+  }
+
   let binaryReplaced = false;
-  if (hasUpload) {
+  if (repullPr) {
+    const source = build.source;
+    if (source?.type !== 'github-pr') {
+      return json({ error: 'This beta was not created from a GitHub PR' }, 400, headers);
+    }
+    const fetched = await fetchPrBinaries(env, { owner: source.owner, repo: source.repo, pr: source.pr });
+    if ('error' in fetched) return json({ error: fetched.error }, fetched.status, headers);
+
+    const prDeviceBuilds: PrDeviceBuild[] = [];
+    for (const bin of fetched.binaries) {
+      if (!bin.cfgKey) {
+        const sha = await sha256Hex(bin.data);
+        await env.FIRMWARE_BUCKET.put(`builds/beta/${build.id}/firmware.bin`, bin.data, {
+          customMetadata: { sha256: sha },
+        });
+        await env.BUILD_META.delete(`sha256:beta:${build.id}`);
+        build.firmwareSize = bin.data.byteLength;
+        build.firmwareSha256 = sha;
+        binaryReplaced = true;
+        continue;
+      }
+      const existingId = build.prDeviceBuilds?.find(d => d.device === bin.cfgKey)?.id;
+      const updated = await upsertDeviceBuild(
+        env, ctx, DEVICE_BUILDS[bin.cfgKey], existingId, bin.data,
+        betaDisplayName(build), build.notes, notifyRequested(body.notify)
+      );
+      prDeviceBuilds.push({ device: bin.cfgKey, id: updated.id });
+    }
+    if (prDeviceBuilds.length) build.prDeviceBuilds = prDeviceBuilds;
+  } else if (hasUpload) {
     if (body.firmware!.size === 0) {
       return json({ error: 'Firmware file is empty' }, 400, headers);
     }
@@ -4002,20 +4177,39 @@ async function handleDeviceBuildUpload(
   const notes = (typeof notesRaw === 'string' ? notesRaw.trim() : '') || '';
 
   const data = await (firmware as File).arrayBuffer();
+  const build = await upsertDeviceBuild(env, ctx, cfg, undefined, data, name, notes, notifyRequested(formData.get('notify')));
+  return json({ build }, 201, headers);
+}
+
+// Replaces the binary of `existingId` when it's still in the list, otherwise
+// appends a new build.
+async function upsertDeviceBuild(
+  env: Env,
+  ctx: ExecutionContext,
+  cfg: DeviceBuildConfig,
+  existingId: string | undefined,
+  data: ArrayBuffer,
+  name: string,
+  notes: string,
+  notify: boolean
+): Promise<StoredDeviceBuild> {
+  const builds = await readDeviceBuildList(env, cfg);
   const sha256 = await sha256Hex(data);
-  const build: StoredDeviceBuild = {
-    id: crypto.randomUUID(),
+  let build = builds.find(b => b.id === existingId);
+  if (!build) {
+    build = { id: crypto.randomUUID(), name };
+    builds.push(build);
+  }
+  Object.assign(build, {
     name,
     notes,
     firmwareSize: data.byteLength,
     firmwareSha256: sha256,
     uploadedAt: new Date().toISOString(),
-  };
+  });
   await env.FIRMWARE_BUCKET.put(deviceBuildR2Key(cfg, build.id), data, {
     customMetadata: { sha256 },
   });
-
-  const builds = [...await readDeviceBuildList(env, cfg), build];
   await writeDeviceBuildList(env, cfg, builds);
 
   scheduleInstatusTask(
@@ -4024,12 +4218,11 @@ async function handleDeviceBuildUpload(
       env,
       cfg.statusDevice,
       builds.map(deviceBuildStatus),
-      notifyRequested(formData.get('notify')) ? deviceBuildStatus(build) : undefined
+      notify ? deviceBuildStatus(build) : undefined
     ),
     `${cfg.label} build`
   );
-
-  return json({ build }, 201, headers);
+  return build;
 }
 
 type DeviceBuildUpdateInput = {

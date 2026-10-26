@@ -175,7 +175,8 @@ export interface ThemeBuildMetadata {
 
 export type BetaSource =
   | { type: 'upload' }
-  | { type: 'github-release'; owner: string; repo: string; tag: string; asset: string };
+  | { type: 'github-release'; owner: string; repo: string; tag: string; asset: string }
+  | { type: 'github-pr'; owner: string; repo: string; pr: number; asset: string };
 
 // Xteink models that share the release/nightly/stock/beta catalog and can have
 // their firmware options hidden per-device from the admin panel.
@@ -198,7 +199,12 @@ export interface BetaBuild {
   // Devices on which this beta is hidden in the web flasher. Absent/empty means
   // shown on every device (backwards-compatible with legacy entries).
   hiddenDevices?: FirmwareDevice[];
+  // Device builds imported alongside a github-pr beta, updated in place on re-pull.
+  prDeviceBuilds?: PrDeviceBuild[];
 }
+
+// `device` is a DEVICE_BUILDS key (x4pro, sticky, ...).
+export type PrDeviceBuild = { device: string; id: string };
 
 // Per-device visibility for the fixed "official release" firmware buttons
 // (CrossPoint stable, Nightly, Stock English, Stock Chinese). Keyed by release

@@ -109,3 +109,14 @@ test('keeps notifications concise when a beta has no notes', () => {
     'Page Turner v10 is now available for Xteink X3 and Xteink X4.'
   )
 })
+
+test('keeps github-pr source and linked device builds', () => {
+  const build = normalizeBetaBuild({
+    id: 'beta-pr',
+    title: 'PR Test',
+    source: { type: 'github-pr', owner: 'o', repo: 'r', pr: 3787, asset: 'firmware.bin' },
+    prDeviceBuilds: [{ device: 'x4pro', id: 'abc' }, { device: 'sticky' }],
+  })
+  assert.deepEqual(build.source, { type: 'github-pr', owner: 'o', repo: 'r', pr: 3787, asset: 'firmware.bin' })
+  assert.deepEqual(build.prDeviceBuilds, [{ device: 'x4pro', id: 'abc' }])
+})
