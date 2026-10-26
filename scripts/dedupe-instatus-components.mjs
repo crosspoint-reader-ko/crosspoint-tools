@@ -25,12 +25,13 @@ async function api(path, method = 'GET') {
       method,
       headers: { Authorization: `Bearer ${apiKey}` },
     })
-    if (res.status === 429 && attempt < 5) {
-      await new Promise(r => setTimeout(r, 2000 * (attempt + 1)))
+    const text = await res.text()
+    // Limit is 60/min; Instatus reports it as a 500 "Too many requests", not a 429.
+    if ((res.status === 429 || text.includes('Too many requests')) && attempt < 5) {
+      await new Promise(r => setTimeout(r, 60_000))
       continue
     }
-    if (!res.ok) throw new Error(`${method} ${path}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`)
-    const text = await res.text()
+    if (!res.ok) throw new Error(`${method} ${path}: HTTP ${res.status} ${text.slice(0, 200)}`)
     return text ? JSON.parse(text) : null
   }
 }
@@ -75,4 +76,5 @@ if (!apply) {
 for (const c of toDelete) {
   await api(`/v1/${pageId}/components/${c.id}`, 'DELETE')
   console.log(`deleted ${c.id} (${c.name})`)
+  await new Promise(r => setTimeout(r, 1100)) // stay under 60 requests/min
 }
