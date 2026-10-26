@@ -38,7 +38,11 @@ async function api(path, method = 'GET') {
 const components = []
 for (let page = 1; page <= 50; page++) {
   const batch = await api(`/v2/${pageId}/components?per_page=100&page=${page}`)
-  components.push(...batch)
+  // Subcomponents are nested under their group in `children`.
+  for (const g of batch) {
+    components.push(g)
+    for (const c of g.children || []) components.push({ ...c, groupId: g.id })
+  }
   if (batch.length < 100) break
 }
 

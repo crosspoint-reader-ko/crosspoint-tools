@@ -60,6 +60,7 @@ type InstatusComponent = {
   group?: string | { id?: string } | null;
   groupId?: string | null;
   translations?: InstatusTranslations | null;
+  children?: InstatusComponent[];
 };
 
 type ComponentTarget = {
@@ -303,8 +304,9 @@ async function resolveComponent(
   return null;
 }
 
-// Paginated: reading only the first 100 made every component past page 1
-// look missing.
+// The v2 list returns only top-level groups, with their subcomponents nested
+// under `children` (no group field of their own). Flatten them, tagging each
+// with its parent's id, or name+group lookups never find a subcomponent.
 async function listComponents(config: InstatusConfig): Promise<InstatusComponent[]> {
   const all: InstatusComponent[] = [];
   for (let page = 1; page <= 20; page++) {
@@ -313,7 +315,10 @@ async function listComponents(config: InstatusConfig): Promise<InstatusComponent
       `/v2/${config.pageId}/components?per_page=100&page=${page}`,
       { method: 'GET' }
     ) || [];
-    all.push(...batch);
+    for (const component of batch) {
+      all.push(component);
+      for (const child of component.children || []) all.push({ ...child, groupId: component.id });
+    }
     if (batch.length < 100) break;
   }
   return all;

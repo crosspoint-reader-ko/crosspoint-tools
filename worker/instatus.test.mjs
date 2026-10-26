@@ -23,6 +23,7 @@ function jsonResponse(value, status = 200) {
 test('never creates a missing component and deduplicates release notifications', async (t) => {
   const kv = new Map()
   const components = new Map([
+    ['x3-stable', { id: 'x3-stable', name: 'Stable', description: 'old', status: 'OPERATIONAL', order: 0, archived: false }],
     ['x4-stable', {
       id: 'x4-stable',
       name: 'Stable',
@@ -52,9 +53,11 @@ test('never creates a missing component and deduplicates release notifications',
       return jsonResponse(components.get('x4-stable'))
     }
     if (method === 'GET' && url.pathname === '/v2/page/components') {
-      // 100 filler components on page 1 so the real ones only show up on page 2.
-      const filler = Array.from({ length: 100 }, (_, i) => ({ id: `f${i}`, name: 'Other', group: 'other' }))
-      return jsonResponse(url.searchParams.get('page') === '2' ? [...components.values()] : filler)
+      // Real v2 shape: top-level groups with subcomponents nested in `children`.
+      return jsonResponse([
+        { id: 'x3-group', name: 'Xteink X3', children: [components.get('x3-stable')] },
+        { id: 'x4-group', name: 'Xteink X4', children: [components.get('x4-stable')] },
+      ])
     }
     if (method === 'POST' && url.pathname === '/v1/page/components') {
       componentCreates++
@@ -92,10 +95,12 @@ test('never creates a missing component and deduplicates release notifications',
   await reconcileStableStatus(env, build, true)
 
   assert.equal(componentCreates, 0)
+  // X3 has no configured component ID, so it's found by name inside its group.
+  assert.equal(components.get('x3-stable').description, 'v1.5.0')
   assert.equal(components.get('x4-stable').description, 'v1.5.0')
   assert.equal(components.get('x4-stable').translations.description.en, 'v1.5.0')
   assert.equal(incidents.length, 1)
-  assert.deepEqual(incidents[0].components, ['x4-stable'])
+  assert.deepEqual(new Set(incidents[0].components), new Set(['x3-stable', 'x4-stable']))
   assert.equal(kv.get('instatus:notified:stable'), 'sha-150')
 
   await reconcileStableStatus(env, build, true)
