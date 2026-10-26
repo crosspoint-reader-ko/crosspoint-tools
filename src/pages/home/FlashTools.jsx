@@ -38,6 +38,7 @@ const NOTES_PROSE =
   '[&_blockquote]:border-l-2 [&_blockquote]:border-stone-300 [&_blockquote]:pl-3 [&_blockquote]:text-stone-500 ' +
   '[&_hr]:my-3 [&_hr]:border-stone-200'
 import { trackFirmwareFlash } from '../../lib/analytics.js'
+import { DEVICES } from '../../lib/devices.ts'
 
 // ---------- small presentational bits ----------
 
@@ -155,20 +156,7 @@ function StepsList({ steps, states, percent }) {
 
 // ---------- main component ----------
 
-const MODELS = [
-  { id: 'x4', name: 'Xteink X4', res: '480 × 800' },
-  { id: 'x4pro', name: 'Xteink X4 Pro', res: '480 × 800' },
-  { id: 'x4c', name: 'Xteink X4C', res: '480 × 800' },
-  { id: 'x3', name: 'Xteink X3', res: '528 × 792' },
-  { id: 'sticky', name: 'Seeed Sticky', res: '480 × 800' },
-  { id: 'm5paper', name: 'M5Paper v1.1', res: '540 × 960' },
-  { id: 'm5papers3', name: 'M5Paper S3', res: '540 × 960' },
-  { id: 'papermono', name: 'M5PaperMono', res: '480 × 800' },
-  { id: 'lilygo', name: 'LilyGo T5', res: '540 × 960' },
-  { id: 'metalio', name: 'Metalio E-INK4', res: '480 × 800' },
-  { id: 'eego_a4', name: 'EEGO Reader A4', res: '552 × 768' },
-  { id: 'picco', name: 'BOOX Picco', res: '480 × 800' },
-]
+const MODELS = DEVICES.map((d) => ({ ...d, res: `${d.width} × ${d.height}` }))
 
 // Vendor favicon shown next to each device name in the picker, grouped by
 // brand family (assets under public/brands/).

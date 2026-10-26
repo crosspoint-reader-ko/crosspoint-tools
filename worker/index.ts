@@ -1,6 +1,7 @@
 import type { Env, BuildMetadata, CustomBuildMetadata, FontBuildMetadata, ThemeBuildMetadata, FontTree, FontFile, BetaBuild, BetaSource, Accessory, FirmwareDevice, ReleaseVisibility } from './types';
 import { betaDevices, normalizeBetaBuildList } from './betas';
 import { pageMeta, SITE } from '../src/lib/seo';
+import { DEVICES } from '../src/lib/devices.ts';
 import { getPrebuiltFontAssetUrl, getPrebuiltFontManifest } from './prebuilt-fonts';
 import {
   discardPendingBetaNotification,
@@ -235,6 +236,9 @@ async function handleApi(
 
       case '/api/catalog':
         return handleCatalog(url, env, corsHeaders);
+
+      case '/api/devices':
+        return Response.json(DEVICES, { headers: { ...corsHeaders, 'Cache-Control': 'public, max-age=3600' } });
 
       case '/api/release/latest':
         return handleLatestRelease(env, corsHeaders);
