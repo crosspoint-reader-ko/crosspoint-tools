@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 import { buildCpfonts } from './build.js'
+import { FtFace } from './freetype.js'
 import { defaultFallbackNames, DEFAULT_FALLBACK_FILES } from './fallbacks.js'
 import { FontBuildError, INTERVAL_PRESETS, parseHexRange, resolveIntervals } from './intervals.js'
 import { deriveKernClasses } from './opentype.js'
@@ -117,4 +118,48 @@ test('buildCpfonts requires a regular style', async () => {
   await assert.rejects(
     buildCpfonts({ family: 'X', sizes: [12], intervals: resolveIntervals('base'), styles: {} }),
     FontBuildError)
+})
+
+// A stub module is the only way to reach the out-of-memory paths: emscripten's
+// malloc returns 0 rather than aborting in this build, and a real OOM needs a
+// multi-gigabyte allocation.
+function stubModule({ failAt }) {
+  const calls = []
+  let next = 1
+  return {
+    calls,
+    HEAPU8: new Uint8Array(4096),
+    HEAPU32: new Uint32Array(1024),
+    HEAP32: new Int32Array(1024),
+    _malloc(bytes) {
+      calls.push(`malloc:${bytes}`)
+      return bytes === failAt ? 0 : next++
+    },
+    _free(ptr) { calls.push(`free:${ptr}`) },
+    _cp_face_new() { calls.push('face_new'); return 7 },
+    _cp_face_free(id) { calls.push(`face_free:${id}`) },
+    _cp_char_indices() { calls.push('char_indices'); return 0 },
+  }
+}
+
+test('FtFace releases the face when scratch allocation fails', () => {
+  // 1 MiB glyph scratch is the last allocation the constructor makes.
+  const mod = stubModule({ failAt: 1 << 20 })
+
+  assert.throws(() => new FtFace(mod, new Uint8Array(16), 'stub'), /Out of memory/)
+
+  // cp_face_new() took ownership of the font data, so the face has to go back
+  // or its slot (one of 32) stays held for the rest of the session.
+  assert.ok(mod.calls.includes('face_free:7'), mod.calls.join(' '))
+})
+
+test('a failed allocation throws instead of writing to address 0', () => {
+  const mod = stubModule({ failAt: 8 })
+  const face = new FtFace(mod, new Uint8Array(16), 'stub')
+  mod.calls.length = 0
+
+  // Address 0 is ordinary linear memory in wasm, so an unchecked pointer would
+  // corrupt the heap rather than fail.
+  assert.throws(() => face.charIndices([0x41, 0x42]), /Out of memory/)
+  assert.ok(!mod.calls.includes('char_indices'), 'must not call into wasm with a null pointer')
 })

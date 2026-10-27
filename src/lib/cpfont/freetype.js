@@ -18,6 +18,16 @@ const INFO_SLOTS = 6
 
 let modulePromise = null
 
+// emscripten's malloc returns 0 when it cannot grow the heap, and address 0 in
+// wasm is ordinary linear memory — an unchecked pointer would silently corrupt
+// the heap instead of failing. A CJK family allocates tens of megabytes, so
+// this is reachable on a memory-starved tab.
+function alloc(mod, bytes) {
+  const ptr = mod._malloc(bytes)
+  if (!ptr) throw new Error('Out of memory while converting the font')
+  return ptr
+}
+
 // The emscripten glue would resolve freetype.wasm relative to its own URL,
 // which Vite rewrites and hashes, so the path is supplied here instead: a
 // `?url` asset import in the browser (dev server and production chunk alike),
@@ -77,7 +87,13 @@ export class FtFace {
 
     this.infoPtr = mod._malloc(INFO_SLOTS * 4)
     this.bitmapPtr = mod._malloc(BITMAP_SCRATCH_BYTES)
-    if (!this.infoPtr || !this.bitmapPtr) throw new Error('Out of memory')
+    if (!this.infoPtr || !this.bitmapPtr) {
+      // cp_face_new() already owns the font data, and the caller only records
+      // the source once the constructor returns — so release the face here or
+      // the slot (one of 32) and its megabytes stay held for the session.
+      this.free()
+      throw new Error('Out of memory while converting the font')
+    }
   }
 
   setSize(pointSize) {
@@ -89,7 +105,7 @@ export class FtFace {
   // 1 byte per codepoint in [start, end]; 1 where the face has a glyph.
   coverageRange(start, end) {
     const count = end - start + 1
-    const ptr = this.mod._malloc(count)
+    const ptr = alloc(this.mod, count)
     try {
       if (this.mod._cp_coverage_range(this.id, start, end, ptr) !== 0) {
         throw new Error('coverage lookup failed')
@@ -103,17 +119,19 @@ export class FtFace {
   // Codepoints -> glyph indices, in one call.
   charIndices(codepoints) {
     const count = codepoints.length
-    const inPtr = this.mod._malloc(count * 4)
-    const outPtr = this.mod._malloc(count * 4)
+    let inPtr = 0
+    let outPtr = 0
     try {
+      inPtr = alloc(this.mod, count * 4)
+      outPtr = alloc(this.mod, count * 4)
       this.mod.HEAPU32.set(Uint32Array.from(codepoints), inPtr >> 2)
       if (this.mod._cp_char_indices(this.id, inPtr, count, outPtr) !== 0) {
         throw new Error('cmap lookup failed')
       }
       return this.mod.HEAP32.slice(outPtr >> 2, (outPtr >> 2) + count)
     } finally {
-      this.mod._free(inPtr)
-      this.mod._free(outPtr)
+      if (inPtr) this.mod._free(inPtr)
+      if (outPtr) this.mod._free(outPtr)
     }
   }
 
@@ -121,7 +139,7 @@ export class FtFace {
   charmap() {
     let cap = 1 << 16
     for (;;) {
-      const ptr = this.mod._malloc(cap * 8)
+      const ptr = alloc(this.mod, cap * 8)
       try {
         const count = this.mod._cp_charmap_dump(this.id, ptr, cap)
         if (count < 0) {
